@@ -1,0 +1,16 @@
+# Environnement virtuel
+venv/
+.env
+
+# Base de données
+*.db
+instance/
+
+# Fichiers temporaires
+__pycache__/
+*.pyc
+
+# Fichiers générés
+*.ifc
+*.png
+*.csv

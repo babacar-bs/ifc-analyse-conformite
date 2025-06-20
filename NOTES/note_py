@@ -1,0 +1,267 @@
+# # Configuration de base
+# app.config['UPLOAD_FOLDER'] = 'uploads/'
+# app.config['OUTPUT_FOLDER'] = 'outputs/'
+# app.config['MAX_CONTENT_LENGTH'] = 1000 * 1024 * 1024  # Limite à 16 Mo
+
+# # Créer les dossiers s'ils n'existent pas
+# os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+# os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
+
+# # Fonction pour vérifier les extensions de fichiers
+# def allowed_file(filename):
+#     return '.' in filename and \
+#            filename.rsplit('.', 1)[1].lower() in {'csv', 'ifc'}
+
+# @app.route('/download')
+# def download_file():
+#     try:
+#         # Chemin du fichier IFC généré
+#         filepath = os.path.join(app.config['OUTPUT_FOLDER'], 'parcelle.ifc')
+#         return send_file(filepath, as_attachment=True)
+#     except Exception as e:
+#         return str(e), 404 - 906124
+
+# if __name__ == '__main__':
+#     app.run(debug=True)
+
+from flask import Flask, render_template, request
+import os
+import matplotlib
+matplotlib.use('Agg')  # Utilise un backend sans interface GUI
+import matplotlib.pyplot as plt
+from werkzeug.utils import secure_filename
+from modules.conversion import convert_coordinates_from_csv
+from modules.traitement import extraire_points_emprise
+from matplotlib.patches import Polygon
+from scipy.spatial import ConvexHull
+import numpy as np
+import pandas as pd
+import random
+
+
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = 'uploads'
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+from scipy.spatial import ConvexHull
+import numpy as np
+from matplotlib import cm
+import matplotlib.colors as mcolors
+
+def dessiner_emprise(df_points):
+    points = df_points[["X", "Y"]].values
+    hull = ConvexHull(points)
+    vertices = points[hull.vertices]
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    # Générer une palette de couleurs différentes
+    n_segments = len(vertices)
+    # colors = cm.get_cmap('tab20', n_segments)  
+    colors = plt.colormaps.get_cmap('tab20', n_segments) # Palette qualitative avec jusqu'à 20 couleurs
+
+
+    # Dessiner chaque segment individuellement avec une couleur différente
+    for i in range(n_segments):
+        p1 = vertices[i]
+        p2 = vertices[(i + 1) % n_segments]  # Boucle fermée
+        color = colors(i)
+
+        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color=color, linewidth=2)
+        
+        # Position du label au centre du segment
+        mid_x = (p1[0] + p2[0]) / 2
+        mid_y = (p1[1] + p2[1]) / 2
+        ax.text(mid_x, mid_y, str(i), fontsize=12, bbox=dict(facecolor='white', edgecolor='black', boxstyle='round'))
+
+    # Affichage des points
+    ax.scatter(points[:, 0], points[:, 1], color='black', s=30, zorder=5)
+
+    ax.set_xlim(min(points[:, 0]) - 1, max(points[:, 0]) + 1)
+    ax.set_ylim(min(points[:, 1]) - 1, max(points[:, 1]) + 1)
+    ax.set_title("Polygone 2D de l'emprise avec segments colorés")
+    ax.set_aspect('equal')
+    ax.grid(True)
+
+    plt.savefig("static/emprise_polygone.png", dpi=300)
+    plt.close()
+
+
+
+# def dessiner_emprisee(df_points):
+#     points = df_points[["X", "Y"]].values
+#     hull = ConvexHull(points)
+#     vertices = points[hull.vertices]
+#     print(vertices) #Les coordonnees des points du polygone
+
+#     fig, ax = plt.subplots(figsize=(10, 10))
+#     polygon = Polygon(vertices, fill=True, alpha=0.5, edgecolor='blue', linewidth=2)
+#     ax.add_patch(polygon)
+#     ax.scatter(points[:, 0], points[:, 1], color='red', s=20)
+#     for i, point in enumerate(vertices):
+#         ax.annotate(f"{i}", (point[0], point[1]), fontsize=12)
+
+#     ax.set_xlim(min(points[:, 0]) - 1, max(points[:, 0]) + 1)
+#     ax.set_ylim(min(points[:, 1]) - 1, max(points[:, 1]) + 1)
+#     ax.set_title('Polygone 2D de l\'emprise')
+#     ax.set_aspect('equal')
+#     ax.grid(True)
+
+#     plt.savefig("static/emprise_polygone.png", dpi=300)
+
+#     plt.close()  # Pour éviter les répétitions si serveur Flask tourne en continu
+
+def traiter_fichier_ifc(filepath):
+
+    # Étape 1 : Récuperations des points du polygone de la parcelle 
+    df_points = extraire_points_emprise(filepath)
+    if df_points is None:
+        return {"error": "Aucun élément avec Category=EMPRISE trouvé."}
+
+    dessiner_emprise(df_points)
+
+    return {
+        "elements": len(df_points),
+        "sommets": len(df_points),
+        "image_path": "static/emprise_polygone.png"
+    }
+
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    resultats = None
+    filename = ""
+
+    if request.method == "POST":
+        fichier = request.files.get("ifc-file")
+        if fichier:
+            print("obtenu")
+            filename = secure_filename(fichier.filename)
+            chemin = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            fichier.save(chemin)
+            
+            resultats = traiter_fichier_ifc(chemin)
+
+    return render_template("index.html", filename=filename, resultats=resultats)
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+
+
+
+#####################################################################################################################
+#####################################################################################################################
+#####################################################################################################################
+
+from flask import Flask, render_template, request
+import os
+import matplotlib
+matplotlib.use('Agg')  # Utilise un backend sans interface GUI
+import matplotlib.pyplot as plt
+from werkzeug.utils import secure_filename
+from modules.conversion import convert_coordinates_from_csv
+from modules.traitement import extraire_points_emprise
+from matplotlib.patches import Polygon
+from scipy.spatial import ConvexHull
+import numpy as np
+import pandas as pd
+import random
+from matplotlib import cm
+import matplotlib.colors as mcolors
+
+
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = 'uploads'
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+
+def dessiner_emprise(df_points):
+    points = df_points[["X", "Y"]].values
+    hull = ConvexHull(points)
+    vertices = points[hull.vertices]
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    # Générer une palette de couleurs différentes
+    n_segments = len(vertices)
+    colors = cm.get_cmap('tab20', n_segments)  
+    # colors = plt.colormaps.get_cmap('tab20', n_segments) # Palette qualitative avec jusqu'à 20 couleurs
+
+
+    # Dessiner chaque segment individuellement avec une couleur différente
+    for i in range(n_segments):
+        p1 = vertices[i]
+        p2 = vertices[(i + 1) % n_segments]  # Boucle fermée
+        color = colors(i)
+
+        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color=color, linewidth=2)
+        
+        # Position du label au centre du segment
+        mid_x = (p1[0] + p2[0]) / 2
+        mid_y = (p1[1] + p2[1]) / 2
+        ax.text(mid_x, mid_y, str(i), fontsize=12, bbox=dict(facecolor='white', edgecolor='black', boxstyle='round'))
+
+    # Affichage des points
+    ax.scatter(points[:, 0], points[:, 1], color='black', s=30, zorder=5)
+
+    ax.set_xlim(min(points[:, 0]) - 1, max(points[:, 0]) + 1)
+    ax.set_ylim(min(points[:, 1]) - 1, max(points[:, 1]) + 1)
+    ax.set_title("Polygone 2D de l'emprise avec segments colorés")
+    ax.set_aspect('equal')
+    ax.grid(True)
+
+    plt.savefig("static/emprise_polygone.png", dpi=300)
+    plt.close()
+
+    ####Ajout
+    segments_info = []
+
+    for i in range(n_segments):
+        p1 = vertices[i]
+        p2 = vertices[(i + 1) % n_segments]
+        segments_info.append({
+            "id": i,
+            "start": {"x": float(p1[0]), "y": float(p1[1])},
+            "end": {"x": float(p2[0]), "y": float(p2[1])},
+        })
+
+    return segments_info
+
+
+def traiter_fichier_ifc(filepath):
+
+    # Étape 1 : Récuperations des points du polygone de la parcelle 
+    df_points = extraire_points_emprise(filepath)
+    if df_points is None:
+        return {"error": "Aucun élément avec Category=EMPRISE trouvé."}
+
+    segments_info = dessiner_emprise(df_points)
+
+    return {
+        "elements": len(df_points),
+        "sommets": len(df_points),
+        "image_path": "static/emprise_polygone.png",
+        "segments" : segments_info
+    }
+
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    resultats = None
+    filename = ""
+
+    if request.method == "POST":
+        fichier = request.files.get("ifc-file")
+        if fichier:
+            print("obtenu")
+            filename = secure_filename(fichier.filename)
+            chemin = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            fichier.save(chemin)
+            
+            resultats = traiter_fichier_ifc(chemin)
+
+    return render_template("index.html", filename=filename, resultats=resultats)
+
+if __name__ == '__main__':
+    app.run(debug=True)

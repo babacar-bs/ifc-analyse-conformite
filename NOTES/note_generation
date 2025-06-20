@@ -1,0 +1,852 @@
+import csv
+import numpy as np
+from pyproj import Transformer
+import matplotlib.pyplot as plt
+import os
+import uuid
+import time
+import ifcopenshell
+import ifcopenshell.geom
+import ifcopenshell.api
+import math
+from datetime import datetime
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+
+# Paramètres configurables
+EXTRUSION_HEIGHT = 28.0  # Hauteur d'extrusion en mètres
+OUTPUT_DIR = "outputs"  # Dossier de sortie
+IFC_SCHEMA = "IFC2X3"  # Schema IFC
+# FACADE_COLOR = (0.5, 0.0, 0.7)  # Couleur violette (R, G, B)
+FACADE_COLOR = (0.3, 0.0, 0.2)  # Violet foncé tirant sur le rouge
+
+def parse_csv(csv_file):
+    """
+    Extrait les segments de façade depuis un fichier CSV.
+    Le CSV doit avoir les colonnes: Segment, X1, Y1, X2, Y2, Hauteur
+    Renvoie une liste de tuples (x1, y1, x2, y2, hauteur).
+    """
+    segments = []
+
+    with open(csv_file, mode='r', encoding='utf-8-sig') as file:
+        reader = csv.DictReader(file)
+
+        for row in reader:
+            try:
+                x1 = float(row['X1'])
+                y1 = float(row['Y1'])
+                x2 = float(row['X2'])
+                y2 = float(row['Y2'])
+                height = float(row['Hauteur'])
+                segments.append((x1, y1, x2, y2, height))
+            except (ValueError, KeyError) as e:
+                print(f"Erreur lors de la lecture de la ligne: {row}. Erreur: {e}")
+                continue
+
+    return segments
+
+def extract_coordinates_from_ifc(ifc_path):
+    """
+    Extrait les coordonnées du site à partir d'un fichier IFC existant.
+    Retourne (x, y, z) ou None si échec.
+    """
+    try:
+        ifc_file = ifcopenshell.open(ifc_path)
+
+        # Chercher le site
+        sites = ifc_file.by_type("IfcSite")
+        if not sites:
+            print("Aucun site trouvé dans le fichier IFC.")
+            return None
+
+        site = sites[0]
+
+        # Obtenir les coordonnées du placement du site
+        if site.ObjectPlacement:
+            placement = site.ObjectPlacement
+
+            if hasattr(placement, "RelativePlacement"):
+                if hasattr(placement.RelativePlacement, "Location"):
+                    location = placement.RelativePlacement.Location
+                    if hasattr(location, "Coordinates"):
+                        coords = location.Coordinates
+                        return (coords[0], coords[1], coords[2] if len(coords) > 2 else 0.0)
+
+        print("Structure de coordonnées non trouvée dans le fichier IFC.")
+        return None
+    except Exception as e:
+        print(f"Erreur lors de l'extraction des coordonnées: {e}")
+        return None
+
+def extract_points_from_segments(segments):
+    """
+    Extrait tous les points uniques à partir des segments
+    Renvoie une liste de points uniques dans l'ordre
+    """
+    points = []
+    # On prend le premier point du premier segment
+    if segments:
+        x1, y1, _, _, _ = segments[0]
+        points.append((x1, y1, 0))  # Z=0 car nous travaillerons en 2D
+
+        # Pour chaque segment, on ajoute le point final
+        for seg in segments:
+            _, _, x2, y2, _ = seg
+            points.append((x2, y2, 0))
+
+    return points
+
+def normalize_coordinates(segments):
+    """
+    Normalise les coordonnées des segments en les centrant autour de (0,0).
+    Renvoie:
+    - segments normalisés (x1,y1,x2,y2)
+    - hauteurs des façades
+    - centroïde
+    """
+    # Extraire tous les points pour calculer le centroïde
+    all_points = []
+    for seg in segments:
+        all_points.append((seg[0], seg[1]))  # X1,Y1
+        all_points.append((seg[2], seg[3]))  # X2,Y2
+
+    # Calcul du centroïde
+    centroid_x = sum(p[0] for p in all_points) / len(all_points)
+    centroid_y = sum(p[1] for p in all_points) / len(all_points)
+
+    # Normalisation des segments (soustraire le centroïde)
+    normalized_segments = []
+    heights = []
+    for seg in segments:
+        x1 = seg[0] - centroid_x
+        y1 = seg[1] - centroid_y
+        x2 = seg[2] - centroid_x
+        y2 = seg[3] - centroid_y
+        height = seg[4]  # La hauteur est maintenant le 5ème élément
+        normalized_segments.append((x1, y1, x2, y2))
+        heights.append(height)
+
+    return normalized_segments, heights, (centroid_x, centroid_y)
+
+def create_owner_history(ifc_file):
+    """Crée les entités de propriété et d'historique pour le fichier IFC."""
+    person = ifc_file.create_entity("IfcPerson", FamilyName="Utilisateur")
+    organization = ifc_file.create_entity("IfcOrganization", Name="Organisation")
+
+    person_and_org = ifc_file.create_entity("IfcPersonAndOrganization",
+                                            ThePerson=person,
+                                            TheOrganization=organization)
+
+    application = ifc_file.create_entity("IfcApplication",
+                                        ApplicationDeveloper=organization,
+                                        Version="1.0",
+                                        ApplicationFullName="CSV to IFC Converter",
+                                        ApplicationIdentifier="CSV2IFC")
+
+    timestamp = int(time.time())
+    owner_history = ifc_file.create_entity("IfcOwnerHistory",
+                                        OwningUser=person_and_org,
+                                        OwningApplication=application,
+                                        CreationDate=timestamp)
+
+    return owner_history
+
+def create_color_rgb(ifc_file, r, g, b):
+    """
+    Crée une couleur RGB pour les propriétés de style
+
+    Args:
+        ifc_file: Le fichier IFC
+        r, g, b: Valeurs RGB (0.0 à 1.0)
+    """
+    return ifc_file.create_entity("IfcColourRgb", Name="Violet", Red=r, Green=g, Blue=b)
+
+def create_surface_style(ifc_file, color):
+    """
+    Crée un style de surface avec une couleur spécifiée
+
+    Args:
+        ifc_file: Le fichier IFC
+        color: Entité IfcColourRgb
+    """
+    # Créer le style de surface avec rendu
+    surface_style_rendering = ifc_file.create_entity("IfcSurfaceStyleRendering",
+                                                    SurfaceColour=color,
+                                                    Transparency=0.0,  # 0 = opaque
+                                                    ReflectanceMethod="NOTDEFINED")
+
+    # Définir le style de surface
+    return ifc_file.create_entity("IfcSurfaceStyle",
+                                Name="FacadeStyle",
+                                Side="BOTH",
+                                Styles=[surface_style_rendering])
+
+def create_styled_item(ifc_file, item, style):
+    """
+    Associe un style à un item
+
+    Args:
+        ifc_file: Le fichier IFC
+        item: L'élément à styliser
+        style: Le style à appliquer
+    """
+    return ifc_file.create_entity("IfcStyledItem",
+                                Item=item,
+                                Styles=[style],
+                                Name="FacadeStyledItem")
+
+def create_units(ifc_file):
+    """Crée les unités pour le modèle IFC."""
+    units = ifc_file.create_entity("IfcUnitAssignment")
+
+    # Unité de longueur (mètres)
+    length_unit = ifc_file.create_entity("IfcSIUnit",
+                                       UnitType="LENGTHUNIT",
+                                       Name="METRE")
+
+    # Unité d'aire (mètres carrés)
+    area_unit = ifc_file.create_entity("IfcSIUnit",
+                                     UnitType="AREAUNIT",
+                                     Name="SQUARE_METRE")
+
+    # Unité de volume (mètres cubes)
+    volume_unit = ifc_file.create_entity("IfcSIUnit",
+                                       UnitType="VOLUMEUNIT",
+                                       Name="CUBIC_METRE")
+
+    units.Units = [length_unit, area_unit, volume_unit]
+
+    return units
+
+def create_geometric_context(ifc_file):
+    """Crée le contexte de représentation géométrique."""
+    # Créer les directions
+    axis = ifc_file.create_entity("IfcDirection", DirectionRatios=[0.0, 0.0, 1.0])
+    ref_direction = ifc_file.create_entity("IfcDirection", DirectionRatios=[1.0, 0.0, 0.0])
+
+    # Créer le placement
+    axis_placement = ifc_file.create_entity("IfcAxis2Placement3D",
+                                          Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=[0.0, 0.0, 0.0]),
+                                          Axis=axis,
+                                          RefDirection=ref_direction)
+
+    # Créer le contexte
+    context = ifc_file.create_entity("IfcGeometricRepresentationContext",
+                                   ContextType="Model",
+                                   CoordinateSpaceDimension=3,
+                                   Precision=0.0001,
+                                   WorldCoordinateSystem=axis_placement)
+
+    return context
+
+def create_site(ifc_file, owner_history, project, location, global_placement=None):
+    """Crée une entité IfcSite et la lie au projet avec des coordonnées alignées."""
+    # Si on a un placement global de référence, on l'utilise directement
+    if global_placement:
+        site = ifc_file.create_entity("IfcSite",
+            GlobalId=ifcopenshell.guid.new(),
+            OwnerHistory=owner_history,
+            Name="Site",
+            ObjectPlacement=global_placement)
+    else:
+        # Sinon on crée un nouveau placement avec les coordonnées fournies
+        site = ifc_file.create_entity("IfcSite",
+            GlobalId=ifcopenshell.guid.new(),
+            OwnerHistory=owner_history,
+            Name="Site",
+            ObjectPlacement=create_local_placement(ifc_file, None, location))
+
+    # Lier le Site au Projet
+    ifc_file.create_entity("IfcRelAggregates",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=owner_history,
+        RelatingObject=project,
+        RelatedObjects=[site])
+
+    return site
+
+
+def create_building(ifc_file, owner_history, site):
+    """Crée une entité IfcBuilding et la lie au site."""
+    building = ifc_file.create_entity("IfcBuilding",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=owner_history,
+        Name="Building",
+        ObjectPlacement=create_local_placement(ifc_file, site.ObjectPlacement))
+
+    # Lier le Building au Site
+    ifc_file.create_entity("IfcRelAggregates",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=owner_history,
+        RelatingObject=site,
+        RelatedObjects=[building])
+
+    return building
+
+def create_storeyy(ifc_file, owner_history, building, elevation):
+    """Crée une entité IfcBuildingStorey et la lie au building."""
+    storey = ifc_file.create_entity("IfcBuildingStorey",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=owner_history,
+        Name="Storey",
+        Elevation=elevation,
+        ObjectPlacement=create_local_placement(ifc_file, building.ObjectPlacement, (0, 0, elevation)))
+
+    # Lier le Storey au Building
+    ifc_file.create_entity("IfcRelAggregates",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=owner_history,
+        RelatingObject=building,
+        RelatedObjects=[storey])
+
+    return storey
+def create_storey(ifc_file, owner_history, building, elevation, rotation_deg=0, invert_x=False):
+    import math
+
+    angle_rad = math.radians(rotation_deg)
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+
+    # Définir les axes avec inversion éventuelle
+    x_dir = [-cos_a if invert_x else cos_a, sin_a, 0.0]
+    z_dir = [0.0, 0.0, 1.0]
+
+    # Placement relatif au bâtiment
+    axis2placement = ifc_file.create_entity(
+        "IfcAxis2Placement3D",
+        Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, elevation)),
+        RefDirection=ifc_file.create_entity("IfcDirection", DirectionRatios=x_dir),
+        Axis=ifc_file.create_entity("IfcDirection", DirectionRatios=z_dir),
+    )
+
+    placement = ifc_file.create_entity(
+        "IfcLocalPlacement",
+        PlacementRelTo=building.ObjectPlacement,
+        RelativePlacement=axis2placement
+    )
+
+    storey = ifc_file.create_entity(
+        "IfcBuildingStorey",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=owner_history,
+        Name="Etage",
+        ObjectPlacement=placement,
+        CompositionType="ELEMENT"
+    )
+
+    ifc_file.create_entity("IfcRelContainedInSpatialStructure",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=owner_history,
+        RelatingStructure=storey,
+        RelatedElements=[]
+    )
+
+    ifc_file.create_entity(
+    "IfcRelAggregates",
+    GlobalId=ifcopenshell.guid.new(),
+    OwnerHistory=owner_history,
+    RelatingObject=building,
+    RelatedObjects=[storey]
+    )
+
+    return storey
+
+
+def create_local_placement(ifc_file, relative_to=None, location=(0,0,0)):
+    """Crée un placement local pour positionner les éléments."""
+    x, y, z = location
+    point = ifc_file.create_entity("IfcCartesianPoint", Coordinates=[float(x), float(y), float(z)])
+    axis = ifc_file.create_entity("IfcDirection", DirectionRatios=[0.0, 0.0, 1.0])
+    ref_dir = ifc_file.create_entity("IfcDirection", DirectionRatios=[1.0, 0.0, 0.0])
+
+    placement = ifc_file.create_entity("IfcAxis2Placement3D",
+        Location=point,
+        Axis=axis,
+        RefDirection=ref_dir)
+
+    return ifc_file.create_entity("IfcLocalPlacement",
+        PlacementRelTo=relative_to,
+        RelativePlacement=placement)
+
+def create_open_brep_from_segments(ifc_file, segments, heights, context):
+    """
+    Crée un IfcFacetedBrep à partir de segments avec hauteurs variables.
+    Inclut la coloration des façades en violet.
+    """
+    faces = []
+
+    # Créer la couleur violette
+    color = create_color_rgb(ifc_file, *FACADE_COLOR)
+
+    # Créer le style de surface avec la couleur
+    surface_style = create_surface_style(ifc_file, color)
+
+    for i, (x1, y1, x2, y2) in enumerate(segments):
+        height = heights[i]
+
+        # Points pour cette façade
+        bottom_left = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(float(x1), float(y1), 0.0))
+        bottom_right = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(float(x2), float(y2), 0.0))
+        top_right = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(float(x2), float(y2), float(height)))
+        top_left = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(float(x1), float(y1), float(height)))
+
+        # Créer la face
+        polyloop = ifc_file.create_entity("IfcPolyLoop",
+                                        Polygon=[bottom_left, bottom_right, top_right, top_left])
+        face_bound = ifc_file.create_entity("IfcFaceOuterBound", Bound=polyloop, Orientation=True)
+        faces.append(ifc_file.create_entity("IfcFace", Bounds=[face_bound]))
+
+    shell = ifc_file.create_entity("IfcOpenShell", CfsFaces=faces)
+    brep = ifc_file.create_entity("IfcFacetedBrep", Outer=shell)
+
+    # Appliquer le style à notre géométrie
+    styled_item = create_styled_item(ifc_file, brep, surface_style)
+
+    shape_rep = ifc_file.create_entity("IfcShapeRepresentation",
+                                    ContextOfItems=context,
+                                    RepresentationIdentifier="Body",
+                                    RepresentationType="Brep",
+                                    Items=[brep])
+
+    # Créer une présentation de style pour le produit
+    presentation_layer = ifc_file.create_entity("IfcPresentationLayerAssignment",
+                                           Name="FacadeLayer",
+                                           AssignedItems=[shape_rep])
+
+    return ifc_file.create_entity("IfcProductDefinitionShape", Representations=[shape_rep])
+
+
+
+
+
+# def create_space(ifc_file, owner_history, storey, segments, heights, context):
+def create_space(ifc_file, owner_history, storey, segments, heights, context):
+    """
+    Crée un IfcSpace avec des façades de hauteurs variables à partir de segments.
+
+    Args:
+        segments: Liste de tuples (x1,y1,x2,y2)
+        heights: Liste des hauteurs pour chaque segment
+    """
+    space_guid = ifcopenshell.guid.compress(uuid.uuid4().hex)
+    space = ifc_file.create_entity("IfcSpace",
+                                GlobalId=space_guid,
+                                OwnerHistory=owner_history,
+                                Name="Espace CSV",
+                                Description="Espace avec façades de hauteurs variables",
+                                ObjectPlacement=create_local_placement(ifc_file, storey.ObjectPlacement))
+
+    # Créer la représentation avec façades
+    # space_shape = create_open_brep_from_segments(ifc_file, segments, heights, context)
+    space_shape = create_open_brep_from_segments(ifc_file, segments, heights, context)
+
+    space.Representation = space_shape
+
+    # Lier l'espace à l'étage
+    rel_contained = ifc_file.create_entity("IfcRelContainedInSpatialStructure",
+                                        GlobalId=ifcopenshell.guid.compress(uuid.uuid4().hex),
+                                        OwnerHistory=owner_history,
+                                        Name="StoreyContainer",
+                                        Description="Relation Étage-Espace",
+                                        RelatingStructure=storey,
+                                        RelatedElements=[space])
+    return space
+
+
+def extract_alignment_parameters_from_ifc(ifc_path):
+    """
+    Extrait tous les paramètres d'alignement d'un fichier IFC existant.
+    Gère les cas où certains éléments n'ont pas de représentation géométrique.
+    """
+    try:
+        import ifcopenshell
+        import ifcopenshell.geom
+
+        ifc_file = ifcopenshell.open(ifc_path)
+        settings = ifcopenshell.geom.settings()
+        settings.set(settings.USE_WORLD_COORDS, True)
+
+        # Dictionnaire pour stocker tous les paramètres
+        alignment_params = {
+            "location": {},
+            "geometry": {},
+            "global_placement": None
+        }
+
+        # Récupérer le site et ses coordonnées
+        sites = ifc_file.by_type("IfcSite")
+        if sites:
+            site = sites[0]
+            if site.ObjectPlacement:
+                # Extraire les coordonnées globales du site
+                placement = site.ObjectPlacement
+                alignment_params["global_placement"] = placement
+
+                if hasattr(placement, "RelativePlacement"):
+                    if hasattr(placement.RelativePlacement, "Location"):
+                        location = placement.RelativePlacement.Location
+                        if hasattr(location, "Coordinates"):
+                            coords = location.Coordinates
+                            alignment_params["location"]["site_global_x"] = coords[0]
+                            alignment_params["location"]["site_global_y"] = coords[1]
+                            alignment_params["location"]["site_global_z"] = coords[2] if len(coords) > 2 else 0.0
+                            print(f"Coordonnées du site extraites: X={coords[0]}, Y={coords[1]}, Z={coords[2] if len(coords) > 2 else 0.0}")
+
+        # Déterminer les limites de la boîte englobante à partir de tous les éléments
+        # plutôt que de se fier uniquement au bâtiment
+        print("Analyse des éléments pour déterminer les dimensions globales...")
+
+        # Initialiser les valeurs min/max
+        min_x, min_y, min_z = float('inf'), float('inf'), float('inf')
+        max_x, max_y, max_z = float('-inf'), float('-inf'), float('-inf')
+
+        # Types d'éléments à considérer pour la bounding box
+        geom_elements = []
+
+        # Collecter des objets qui ont probablement une géométrie
+        for element_type in ["IfcWall", "IfcSlab", "IfcColumn", "IfcBeam", "IfcWindow", "IfcDoor", "IfcSpace"]:
+            geom_elements.extend(ifc_file.by_type(element_type))
+
+        # Si on n'a pas trouvé d'éléments géométriques spécifiques, essayer avec tous les IfcProduct
+        if not geom_elements:
+            geom_elements = ifc_file.by_type("IfcProduct")
+
+        # Limiter le nombre d'éléments à traiter pour éviter un temps de calcul trop long
+        max_elements = 100
+        if len(geom_elements) > max_elements:
+            print(f"Plus de {max_elements} éléments trouvés, traitement limité pour performance")
+            import random
+            geom_elements = random.sample(geom_elements, max_elements)
+
+        element_count = 0
+        for element in geom_elements:
+            try:
+                if element.Representation:
+                    shape = ifcopenshell.geom.create_shape(settings, element)
+                    bbox = shape.bbox()
+
+                    # Mettre à jour les valeurs min/max
+                    min_x = min(min_x, bbox.min.x)
+                    min_y = min(min_y, bbox.min.y)
+                    min_z = min(min_z, bbox.min.z)
+                    max_x = max(max_x, bbox.max.x)
+                    max_y = max(max_y, bbox.max.y)
+                    max_z = max(max_z, bbox.max.z)
+
+                    element_count += 1
+            except Exception as e:
+                # Ignorer silencieusement les éléments qui posent problème
+                pass
+
+        print(f"{element_count} éléments analysés pour la bounding box")
+
+        # S'assurer qu'on a bien trouvé des valeurs
+        if min_x != float('inf') and max_x != float('-inf'):
+            alignment_params["geometry"]["min_x"] = min_x
+            alignment_params["geometry"]["min_y"] = min_y
+            alignment_params["geometry"]["min_z"] = min_z
+            alignment_params["geometry"]["max_x"] = max_x
+            alignment_params["geometry"]["max_y"] = max_y
+            alignment_params["geometry"]["max_z"] = max_z
+
+            # Calcul des dimensions de la BoundingBox
+            alignment_params["geometry"]["bbox_length"] = max_x - min_x
+            alignment_params["geometry"]["bbox_width"] = max_y - min_y
+            alignment_params["geometry"]["bbox_height"] = max_z - min_z
+
+            print(f"Dimensions extraites: L={max_x - min_x}, l={max_y - min_y}, H={max_z - min_z}")
+        else:
+            print("Impossible de déterminer les dimensions de la bounding box")
+
+        # Récupérer les informations d'élévation
+        storeys = ifc_file.by_type("IfcBuildingStorey")
+        if storeys:
+            min_elevation = float('inf')
+            max_elevation = float('-inf')
+
+            for storey in storeys:
+                elevation = getattr(storey, "Elevation", 0.0) or 0.0
+                min_elevation = min(min_elevation, elevation)
+                max_elevation = max(max_elevation, elevation)
+
+            if min_elevation != float('inf'):
+                alignment_params["location"]["bottom_elevation"] = min_elevation
+                alignment_params["location"]["top_elevation"] = max_elevation
+                print(f"Élévations extraites: Min={min_elevation}, Max={max_elevation}")
+        else:
+            # Si pas d'étages, utiliser les valeurs de la bounding box
+            if "min_z" in alignment_params["geometry"]:
+                alignment_params["location"]["bottom_elevation"] = alignment_params["geometry"]["min_z"]
+                alignment_params["location"]["top_elevation"] = alignment_params["geometry"]["max_z"]
+                print(f"Élévations calculées depuis la bounding box: Min={alignment_params['geometry']['min_z']}, Max={alignment_params['geometry']['max_z']}")
+
+        return alignment_params
+
+    except Exception as e:
+        print(f"Erreur lors de l'extraction des paramètres d'alignement: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def align_ifc_models(source_ifc_path, target_ifc_path):
+    """
+    Aligne un modèle IFC source sur un modèle IFC cible.
+    Cette fonction extrait les paramètres du modèle cible, puis les applique au modèle source.
+    """
+    try:
+        # Extraire les paramètres d'alignement du modèle cible
+        alignment_params = extract_alignment_parameters_from_ifc(target_ifc_path)
+        if not alignment_params:
+            print("Impossible d'extraire les paramètres d'alignement du modèle cible.")
+            return False
+
+        # Ouvrir le modèle source à modifier
+        source_ifc = ifcopenshell.open(source_ifc_path)
+
+        # Récupérer le site du modèle source
+        sites = source_ifc.by_type("IfcSite")
+        if not sites:
+            print("Aucun site trouvé dans le modèle source.")
+            return False
+
+        site = sites[0]
+
+        # Modifier le placement du site
+        if site.ObjectPlacement and hasattr(site.ObjectPlacement, "RelativePlacement"):
+            if hasattr(site.ObjectPlacement.RelativePlacement, "Location"):
+                # Créer un nouveau point avec les coordonnées du modèle cible
+                new_coords = [
+                    alignment_params['location'].get('site_global_x', 0),
+                    alignment_params['location'].get('site_global_y', 0),
+                    alignment_params['location'].get('site_global_z', 0)
+                ]
+
+                # Remplacer les coordonnées
+                site.ObjectPlacement.RelativePlacement.Location.Coordinates = new_coords
+
+        # Sauvegarder le modèle modifié
+        output_path = source_ifc_path.replace(".ifc", "_aligned.ifc")
+        source_ifc.write(output_path)
+
+        print(f"Modèle aligné sauvegardé sous: {output_path}")
+        return True
+
+    except Exception as e:
+        print(f"Erreur lors de l'alignement des modèles: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+        
+def create_rotated_placement(ifc_file, angle_deg=0, invert_x=False):
+    angle_rad = math.radians(angle_deg)
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+
+    x_dir = [-cos_a if invert_x else cos_a, sin_a, 0.0]
+    z_dir = [0.0, 0.0, 1.0]
+
+    axis2placement = ifc_file.create_entity(
+        "IfcAxis2Placement3D",
+        Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0)),
+        RefDirection=ifc_file.create_entity("IfcDirection", DirectionRatios=x_dir),
+        Axis=ifc_file.create_entity("IfcDirection", DirectionRatios=z_dir),
+    )
+
+    placement = ifc_file.create_entity(
+        "IfcLocalPlacement",
+        PlacementRelTo=None,
+        RelativePlacement=axis2placement
+    )
+    return placement
+
+
+
+def main_extrusion():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    csv_file = "static/enveloppe_finale.csv"
+    base_name = os.path.splitext(os.path.basename(csv_file))[0]
+
+    # 1. Lecture du CSV
+    print("Lecture du fichier CSV...")
+    segments = parse_csv(csv_file)
+    print(f"Nombre de façades: {len(segments)}")
+
+    # 2. Système de coordonnées
+    coord_choice = 3# input("Choisir le système de coordonnées:\n1. Coordonnées normalisées (centrage)\n2. Coordonnées de l'architecte (manuel)\n3. Extraire coordonnées d'un fichier IFC\n4. Extraction complète des paramètres d'alignement d'un IFC\nVotre choix (1/2/3/4): ")
+
+    site_coords = (0, 0, 0)  # Par défaut
+    building_name = "Bâtiment CSV"
+    elevation = 0.0
+    alignment_params = None
+
+    if coord_choice == "2":
+        # Option manuelle - code existant...
+        print("\nEntrez les coordonnées du site de l'architecte:")
+        site_x = float(input("X du site (par ex. 1656523.1073037086): "))
+        site_y = float(input("Y du site (par ex. 8172555.4336276995): "))
+        site_z = float(input("Z du site (par défaut 0.0): ") or "0.0")
+        site_coords = (site_x, site_y, site_z)
+        #building_name = input("Nom du bâtiment (par défaut 'Bâtiment CSV'): ") or building_name
+
+        # Transformation pour les coordonnées de l'architecte
+        normalized_segments, heights, _ = normalize_coordinates(segments)
+        centroid = site_coords
+
+    elif coord_choice == "3":
+        # Extraction simple des coordonnées - code existant...
+        # ifc_path = "AAP_BIM.ifc"#input("\nChemin vers le fichier IFC de l'architecte: ")
+        ifc_path = "uploads/TEST_PC.ifc"
+        coords = extract_coordinates_from_ifc(ifc_path)
+
+        if coords:
+            site_x, site_y, site_z = coords
+            site_coords = (site_x, site_y, site_z)
+            #building_name = input("Nom du bâtiment (par défaut 'Bâtiment CSV'): ") or building_name
+
+            # Transformation pour les coordonnées extraites de l'IFC
+            normalized_segments, heights, _ = normalize_coordinates(segments)
+            centroid = site_coords
+        else:
+            print("Impossible d'extraire les coordonnées, utilisation des coordonnées normalisées.")
+            normalized_segments, heights, centroid = normalize_coordinates(segments)
+
+
+
+    elif coord_choice == "4":
+        # NOUVELLE OPTION: Extraction complète pour alignement précis
+        ifc_path = input("\nChemin vers le fichier IFC de référence pour alignement: ")
+        alignment_params = extract_alignment_parameters_from_ifc(ifc_path)
+
+        if alignment_params and 'location' in alignment_params:
+            print("\nParamètres d'alignement extraits avec succès:")
+
+            # Vérifier la présence des coordonnées du site
+            site_x = alignment_params['location'].get('site_global_x')
+            site_y = alignment_params['location'].get('site_global_y')
+            site_z = alignment_params['location'].get('site_global_z')
+
+            if site_x is not None and site_y is not None:
+                print(f"Site Global X: {site_x}")
+                print(f"Site Global Y: {site_y}")
+                print(f"Site Global Z: {site_z or 0.0}")
+                site_coords = (site_x, site_y, site_z or 0.0)
+            else:
+                print("Coordonnées du site non trouvées, utilisation des valeurs par défaut")
+                site_coords = (0, 0, 0)
+
+            # Vérifier la présence des élévations
+            bottom_elevation = alignment_params['location'].get('bottom_elevation')
+            if bottom_elevation is not None:
+                print(f"Bottom Elevation: {bottom_elevation}")
+                elevation = bottom_elevation
+            else:
+                print("Élévation non trouvée, utilisation de la valeur par défaut (0.0)")
+                elevation = 0.0
+
+            # Afficher les dimensions si disponibles
+            if 'geometry' in alignment_params:
+                bbox_length = alignment_params['geometry'].get('bbox_length')
+                bbox_width = alignment_params['geometry'].get('bbox_width')
+                bbox_height = alignment_params['geometry'].get('bbox_height')
+
+                if bbox_length is not None:
+                    print(f"BBox Length: {bbox_length}")
+                    print(f"BBox Width: {bbox_width}")
+                    print(f"BBox Height: {bbox_height}")
+
+            #building_name = input("Nom du bâtiment (par défaut 'Bâtiment CSV'): ") or building_name
+
+            # Transformation pour les coordonnées extraites de l'IFC
+            normalized_segments, heights, _ = normalize_coordinates(segments)
+            centroid = site_coords
+        else:
+            print("Impossible d'extraire les paramètres complets, utilisation des coordonnées normalisées.")
+            normalized_segments, heights, centroid = normalize_coordinates(segments)
+
+    else:
+        # Option 1 ou par défaut: Normalisation (centrage)
+        print("Normalisation des coordonnées...")
+        normalized_segments, heights, centroid = normalize_coordinates(segments)
+
+
+
+    # 3. Visualisation - avec couleur violette (inchangé)
+    #print("Création de la visualisation...")
+    #plot_3d_polygon_with_variable_facades(normalized_segments, heights)
+
+    # 4. Création IFC
+    print("Création du fichier IFC...")
+    #timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #ifc_filename = f"{base_name}_facades_V_{timestamp}.ifc"
+    ifc_filename = f"parcelle.ifc"
+
+    # Création du fichier de base
+    ifc_file = ifcopenshell.file(schema=IFC_SCHEMA)
+    owner_history = create_owner_history(ifc_file)
+    units = create_units(ifc_file)
+    context = create_geometric_context(ifc_file)
+
+    # Hiérarchie spatiale
+    project = ifc_file.create_entity("IfcProject",
+                                   GlobalId=ifcopenshell.guid.compress(uuid.uuid4().hex),
+                                   Name="Projet CSV")
+    project.UnitsInContext = units
+    project.RepresentationContexts = [context]
+
+    # Créer la hiérarchie spatiale avec les coordonnées configurées
+    site = create_site(ifc_file, owner_history, project, site_coords)
+    building = create_building(ifc_file, owner_history, site)
+    building.Name = building_name
+
+    # Gestion de l'étage
+
+    if coord_choice == "4" and alignment_params:
+        time.sleep(0.5)
+        # Utiliser les paramètres extraits
+        #storey_name = input("Nom de l'étage (par défaut 'Étage 1'): ") or "Étage 1"
+        storey_name = "Étage 1"
+        # On utilise l'élévation extraite précédemment
+    else:
+        # Demander les informations sur l'étage
+        time.sleep(0.5)
+        print("\nConfiguration de l'étage:")
+        #storey_name = input("Nom de l'étage (par défaut 'Étage 1'): ") or "Étage 1"
+        storey_name = "E1"
+        # elevation = float(input("Élévation de l'étage en mètres (par défaut 0.0): ") or "0.0")
+        elevation = float("0.0")
+
+
+    # storey = create_storey(ifc_file, owner_history, building, elevation)
+    storey = create_storey(
+    ifc_file, owner_history, building, elevation,
+    rotation_deg=90,    # Rotation de 90° autour de Z
+    invert_x=True       # Miroir sur l'axe X
+)
+    storey.Name = storey_name
+
+
+
+
+    # Création de l'espace avec façades violettes
+    create_space(ifc_file, owner_history, storey, normalized_segments, heights, context)
+
+    # Sauvegarde
+    output_path = os.path.join(OUTPUT_DIR, ifc_filename)
+    ifc_file.write(output_path)
+    # Vérification des coordonnées
+    print("=== Vérification finale ===")
+    print(f"Coordonnées Site IFC: {site.ObjectPlacement.RelativePlacement.Location.Coordinates}")
+    print(f"Premier point façade: ({segments[0][0]}, {segments[0][1]})")
+
+    print(f"\nFichier IFC généré: {output_path}")
+    print(f"Coordonnées du site utilisées: {site_coords}")
+    print(f"Élévation de l'étage: {elevation} m")
+    print(f"Couleur des façades: Violet ({FACADE_COLOR[0]}, {FACADE_COLOR[1]}, {FACADE_COLOR[2]})")
+
+# Point d'entrée du programme
+
+#1656584.973, 8172592.816, 37.23
+# (1656638.973, 8172606.5, 37.23)

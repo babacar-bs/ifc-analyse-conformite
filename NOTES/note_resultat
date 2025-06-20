@@ -1,0 +1,38 @@
+    <h1>Analyse de la conformite d'une maquette</h1>
+    <h2>Résultats </h2>
+
+
+<div style="display: flex; gap: 40px; align-items: flex-start; flex-wrap: wrap;">
+
+  <!-- Polygone à gauche -->
+  <div style="flex: 1;">
+    <h4>Enveloppe conforme</h4>
+    <!-- <img src="{{ url_for('static', filename='emprise_polygone.png') }}" alt="Polygone emprise" style="max-width: 100%; border: 1px solid #ccc; border-radius: 5px;"> -->
+    <img src= {{ image_enveloppe }}
+     alt="enveloppe_conforme"
+     style="width: 80%;height: auto; max-width: none; border: 2px solid #333; border-radius: 8px;">
+
+  </div>
+
+  <div style="flex: 1;">
+    <h4>Extrusion 3D</h4>
+    <!-- <img src="{{ url_for('static', filename='emprise_polygone.png') }}" alt="Polygone emprise" style="max-width: 100%; border: 1px solid #ccc; border-radius: 5px;"> -->
+    <img src= {{ image_3d }}
+     alt="3d"
+     style="width: 80%;height: auto; max-width: none; border: 2px solid #333; border-radius: 8px;">
+     <br><br>
+    <button type="button" class="btn btn-success"> <a href="/download">Télécharger IFC</a></button>
+
+  </div>
+
+      </div>
+  </form>
+</div>
+
+
+</div>
+
+
+  </div>
+
+

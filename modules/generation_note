@@ -1,0 +1,396 @@
+
+# import ifcopenshell
+# import ifcopenshell.util.element
+# import csv
+# import os
+
+# # ✅ Métadonnées
+# def create_owner_history(ifc_file):
+#     person = ifc_file.create_entity("IfcPerson", FamilyName="SEVE-UP")
+#     org = ifc_file.create_entity("IfcOrganization", Name="SEVE-UP")
+#     person_and_org = ifc_file.create_entity("IfcPersonAndOrganization", ThePerson=person, TheOrganization=org)
+#     app = ifc_file.create_entity(
+#         "IfcApplication",
+#         ApplicationDeveloper=org,
+#         Version="1.0",
+#         ApplicationFullName="Analyse-Conformite",
+#         ApplicationIdentifier="APP001"
+#     )
+#     return ifc_file.create_entity("IfcOwnerHistory", OwningUser=person_and_org, OwningApplication=app)
+
+# # ✅ Couleur
+# def add_global_style(model, shape, rgb=(0.0, 0.5, 1.0)):
+#     color = model.create_entity("IfcColourRgb", Name="Color", Red=rgb[0], Green=rgb[1], Blue=rgb[2])
+#     surface_style = model.create_entity(
+#         "IfcSurfaceStyle",
+#         Name="SurfaceStyle",
+#         Side="BOTH",
+#         Styles=[model.create_entity("IfcSurfaceStyleRendering", SurfaceColour=color)]
+#     )
+#     style_assignment = model.create_entity("IfcPresentationStyleAssignment", Styles=[surface_style])
+#     model.create_entity("IfcStyledItem", Item=shape, Styles=[style_assignment])
+
+# # ✅ Création IFC sans référence
+# def create_ifc_from_csv(csv_path, output_path, altitude=0.0):
+#     ifc_file = ifcopenshell.file(schema="IFC2X3")
+#     owner_history = create_owner_history(ifc_file)
+
+#     # ✅ Unités (mètres)
+#     units = ifc_file.create_entity("IfcUnitAssignment", Units=[
+#         ifc_file.create_entity("IfcSIUnit", UnitType="LENGTHUNIT", Name="METRE")
+#     ])
+
+#     # ✅ Contexte de représentation
+#     context = ifc_file.create_entity("IfcGeometricRepresentationContext",
+#         ContextIdentifier="Plan",
+#         ContextType="Model",
+#         CoordinateSpaceDimension=3,
+#         Precision=1e-05,
+#         WorldCoordinateSystem=ifc_file.create_entity("IfcAxis2Placement3D",
+#             Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+#         )
+#     )
+
+#     # ✅ Projet racine
+#     project = ifc_file.create_entity("IfcProject",
+#         GlobalId=ifcopenshell.guid.new(),
+#         Name="Projet",
+#         OwnerHistory=owner_history,
+#         RepresentationContexts=[context],
+#         UnitsInContext=units
+#     )
+
+#     # ✅ Placement général
+#     site_placement = ifc_file.create_entity("IfcLocalPlacement",
+#         RelativePlacement=ifc_file.create_entity("IfcAxis2Placement3D",
+#             Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+#         )
+#     )
+
+#     # ✅ Hiérarchie spatiale
+#     site = ifc_file.create_entity("IfcSite",
+#         GlobalId=ifcopenshell.guid.new(),
+#         OwnerHistory=owner_history,
+#         Name="Site",
+#         ObjectPlacement=site_placement,
+#         CompositionType="ELEMENT"
+#     )
+
+#     building = ifc_file.create_entity("IfcBuilding",
+#         GlobalId=ifcopenshell.guid.new(),
+#         OwnerHistory=owner_history,
+#         Name="Bâtiment",
+#         ObjectPlacement=site_placement,
+#         CompositionType="ELEMENT"
+#     )
+
+#     storey = ifc_file.create_entity("IfcBuildingStorey",
+#         GlobalId=ifcopenshell.guid.new(),
+#         OwnerHistory=owner_history,
+#         Name="Niveau",
+#         ObjectPlacement=site_placement,
+#         CompositionType="ELEMENT",
+#         Elevation=altitude
+#     )
+
+#     # Lier hiérarchie
+#     ifc_file.create_entity("IfcRelAggregates", GlobalId=ifcopenshell.guid.new(), OwnerHistory=owner_history,
+#                            RelatingObject=project, RelatedObjects=[site])
+#     ifc_file.create_entity("IfcRelAggregates", GlobalId=ifcopenshell.guid.new(), OwnerHistory=owner_history,
+#                            RelatingObject=site, RelatedObjects=[building])
+#     ifc_file.create_entity("IfcRelAggregates", GlobalId=ifcopenshell.guid.new(), OwnerHistory=owner_history,
+#                            RelatingObject=building, RelatedObjects=[storey])
+
+#     # ✅ Lecture CSV
+#     with open(csv_path, newline='') as csvfile:
+#         reader = csv.DictReader(csvfile)
+#         for row in reader:
+#             x1 = float(row['X1'])
+#             y1 = float(row['Y1'])
+#             x2 = float(row['X2'])
+#             y2 = float(row['Y2'])
+#             h = float(row['Hauteur'])
+
+#             # Points 3D
+#             p1 = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(x1, y1, altitude))
+#             p2 = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(x2, y2, altitude))
+#             p3 = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(x2, y2, altitude + h))
+#             p4 = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(x1, y1, altitude + h))
+
+#             poly = ifc_file.create_entity("IfcPolyLoop", Polygon=[p1, p2, p3, p4, p1])
+#             bound = ifc_file.create_entity("IfcFaceOuterBound", Bound=poly, Orientation=True)
+#             face = ifc_file.create_entity("IfcFace", Bounds=[bound])
+#             face_set = ifc_file.create_entity("IfcConnectedFaceSet", CfsFaces=[face])
+#             brep = ifc_file.create_entity("IfcFacetedBrep", Outer=face_set)
+
+#             shape_rep = ifc_file.create_entity("IfcShapeRepresentation",
+#                 ContextOfItems=context,
+#                 RepresentationIdentifier="Body",
+#                 RepresentationType="Brep",
+#                 Items=[brep]
+#             )
+
+#             add_global_style(ifc_file, brep, rgb=(0.0, 0.5, 1.0))
+
+#             rep = ifc_file.create_entity("IfcProductDefinitionShape", Representations=[shape_rep])
+
+#             wall = ifc_file.create_entity("IfcBuildingElementProxy",
+#                 GlobalId=ifcopenshell.guid.new(),
+#                 OwnerHistory=owner_history,
+#                 Name=f"Mur_{row['Segment']}",
+#                 Representation=rep,
+#                 ObjectPlacement=site_placement
+#             )
+
+#             ifc_file.create_entity("IfcRelContainedInSpatialStructure",
+#                 GlobalId=ifcopenshell.guid.new(),
+#                 OwnerHistory=owner_history,
+#                 RelatingStructure=storey,
+#                 RelatedElements=[wall]
+#             )
+
+#     # ✅ Sauvegarde
+#     ifc_file.write(output_path)
+#     print(f"✅ Fichier IFC créé avec succès : {output_path}")
+
+
+# def get_building_storey_info(ifc_path):
+#     ifc = ifcopenshell.open(ifc_path)
+#     storeys = ifc.by_type("IfcBuildingStorey")
+
+#     if not storeys:
+#         print("❌ Aucun IfcBuildingStorey trouvé.")
+#         return None
+
+#     storey = storeys[0]  # Tu peux aussi parcourir tous si besoin
+
+#     info = {
+#         "GlobalId": storey.GlobalId,
+#         "Name": storey.Name,
+#         "Elevation": float(storey.Elevation) if storey.Elevation is not None else None,
+#         "Placement": None
+#     }
+
+#     # Récupérer le placement s’il existe
+#     if hasattr(storey, "ObjectPlacement") and storey.ObjectPlacement:
+#         placement = storey.ObjectPlacement
+#         if hasattr(placement, "RelativePlacement"):
+#             location = placement.RelativePlacement.Location
+#             if hasattr(location, "Coordinates"):
+#                 coords = tuple(float(c) for c in location.Coordinates)
+#                 info["Placement"] = coords
+
+#     return info["Elevation"]
+
+# def main_extrusion(file_ref):
+#     altitude = get_building_storey_info(file_ref)
+#     create_ifc_from_csv(
+#         csv_path="static/enveloppe_finale.csv",
+#         output_path="outputs/parcelle.ifc",
+#         altitude = altitude  # ou 0.0 selon ton besoin
+#     )
+
+
+import csv
+import math
+import ifcopenshell
+
+# ✅ Métadonnées
+def create_owner_history(ifc_file):
+    person = ifc_file.create_entity("IfcPerson", FamilyName="SEVE-UP")
+    org = ifc_file.create_entity("IfcOrganization", Name="SEVE-UP")
+    person_and_org = ifc_file.create_entity("IfcPersonAndOrganization", ThePerson=person, TheOrganization=org)
+    app = ifc_file.create_entity(
+        "IfcApplication",
+        ApplicationDeveloper=org,
+        Version="1.0",
+        ApplicationFullName="Analyse-Conformite",
+        ApplicationIdentifier="APP001"
+    )
+    return ifc_file.create_entity("IfcOwnerHistory", OwningUser=person_and_org, OwningApplication=app)
+
+# ✅ Couleur
+def add_global_style(model, shape, rgb=(0.0, 0.5, 1.0)):
+    color = model.create_entity("IfcColourRgb", Name="Color", Red=rgb[0], Green=rgb[1], Blue=rgb[2])
+    surface_style = model.create_entity(
+        "IfcSurfaceStyle",
+        Name="SurfaceStyle",
+        Side="BOTH",
+        Styles=[model.create_entity("IfcSurfaceStyleRendering", SurfaceColour=color)]
+    )
+    style_assignment = model.create_entity("IfcPresentationStyleAssignment", Styles=[surface_style])
+    model.create_entity("IfcStyledItem", Item=shape, Styles=[style_assignment])
+
+# ✅ Altitude de référence depuis un IFC
+def get_building_storey_info(ifc_path):
+    ifc = ifcopenshell.open(ifc_path)
+    storeys = ifc.by_type("IfcBuildingStorey")
+    if not storeys:
+        print("❌ Aucun IfcBuildingStorey trouvé.")
+        return 0.0
+    return float(storeys[0].Elevation or 0.0)
+
+# ✅ Fonction pour créer des points uniques partagés
+def create_point(ifc_file, cache, x, y, z, precision=4):
+    key = (round(x, precision), round(y, precision), round(z, precision))
+    if key not in cache:
+        cache[key] = ifc_file.create_entity("IfcCartesianPoint", Coordinates=key)
+    return cache[key]
+
+# ✅ Création IFC avec gestion de points partagés et triangulation propre
+def create_ifc_from_csv(csv_path, output_path, altitude=0.0):
+    ifc_file = ifcopenshell.file(schema="IFC2X3")
+    owner_history = create_owner_history(ifc_file)
+
+    units = ifc_file.create_entity("IfcUnitAssignment", Units=[
+        ifc_file.create_entity("IfcSIUnit", UnitType="LENGTHUNIT", Name="METRE")
+    ])
+
+    context = ifc_file.create_entity("IfcGeometricRepresentationContext",
+        ContextIdentifier="Plan",
+        ContextType="Model",
+        CoordinateSpaceDimension=3,
+        Precision=1e-05,
+        WorldCoordinateSystem=ifc_file.create_entity("IfcAxis2Placement3D",
+            Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+        )
+    )
+
+    project = ifc_file.create_entity("IfcProject",
+        GlobalId=ifcopenshell.guid.new(),
+        Name="Projet",
+        OwnerHistory=owner_history,
+        RepresentationContexts=[context],
+        UnitsInContext=units
+    )
+
+    site_placement = ifc_file.create_entity("IfcLocalPlacement",
+        RelativePlacement=ifc_file.create_entity("IfcAxis2Placement3D",
+            Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+        )
+    )
+
+    site = ifc_file.create_entity("IfcSite",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=owner_history,
+        Name="Site",
+        ObjectPlacement=site_placement,
+        CompositionType="ELEMENT"
+    )
+
+    building = ifc_file.create_entity("IfcBuilding",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=owner_history,
+        Name="Bâtiment",
+        ObjectPlacement=site_placement,
+        CompositionType="ELEMENT"
+    )
+
+    storey = ifc_file.create_entity("IfcBuildingStorey",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=owner_history,
+        Name="Niveau",
+        ObjectPlacement=site_placement,
+        CompositionType="ELEMENT",
+        Elevation=altitude
+    )
+
+    ifc_file.create_entity("IfcRelAggregates", GlobalId=ifcopenshell.guid.new(), OwnerHistory=owner_history,
+                           RelatingObject=project, RelatedObjects=[site])
+    ifc_file.create_entity("IfcRelAggregates", GlobalId=ifcopenshell.guid.new(), OwnerHistory=owner_history,
+                           RelatingObject=site, RelatedObjects=[building])
+    ifc_file.create_entity("IfcRelAggregates", GlobalId=ifcopenshell.guid.new(), OwnerHistory=owner_history,
+                           RelatingObject=building, RelatedObjects=[storey])
+
+    all_coords = []
+    with open(csv_path, newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            all_coords.append((float(row['X1']), float(row['Y1'])))
+            all_coords.append((float(row['X2']), float(row['Y2'])))
+    cx = sum(x for x, y in all_coords) / len(all_coords)
+    cy = sum(y for x, y in all_coords) / len(all_coords)
+
+    point_cache = {}
+
+    with open(csv_path, newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            x1 = float(row['X1'])
+            y1 = float(row['Y1'])
+            x2 = float(row['X2'])
+            y2 = float(row['Y2'])
+            h = float(row['Hauteur'])
+            retrait = float(row.get('Retrait', 0))
+            type_facade = row.get('Type', 'NA')
+
+            if type_facade == 'VO' and retrait >= 2:
+                h1 = h - retrait
+                dx = x2 - x1
+                dy = y2 - y1
+                length = math.hypot(dx, dy)
+                dx_norm = dx / length
+                dy_norm = dy / length
+                nx = -dy_norm
+                ny = dx_norm
+                xm = (x1 + x2) / 2
+                ym = (y1 + y2) / 2
+                vx = cx - xm
+                vy = cy - ym
+                if (nx * vx + ny * vy) < 0:
+                    nx *= -1
+                    ny *= -1
+                p1 = create_point(ifc_file, point_cache, x1, y1, altitude)
+                p2 = create_point(ifc_file, point_cache, x2, y2, altitude)
+                p3 = create_point(ifc_file, point_cache, x2, y2, altitude + h1)
+                p4 = create_point(ifc_file, point_cache, x1, y1, altitude + h1)
+                p5 = create_point(ifc_file, point_cache, x2 + nx * retrait, y2 + ny * retrait, altitude + h)
+                p6 = create_point(ifc_file, point_cache, x1 + nx * retrait, y1 + ny * retrait, altitude + h)
+                face1 = ifc_file.create_entity("IfcFace", Bounds=[
+                    ifc_file.create_entity("IfcFaceOuterBound", Bound=ifc_file.create_entity("IfcPolyLoop", Polygon=[p1, p2, p3, p4, p1]), Orientation=True)
+                ])
+                face2 = ifc_file.create_entity("IfcFace", Bounds=[
+                    ifc_file.create_entity("IfcFaceOuterBound", Bound=ifc_file.create_entity("IfcPolyLoop", Polygon=[p4, p3, p5, p6, p4]), Orientation=True)
+                ])
+                face_set = ifc_file.create_entity("IfcConnectedFaceSet", CfsFaces=[face1, face2])
+                brep = ifc_file.create_entity("IfcFacetedBrep", Outer=face_set)
+            else:
+                p1 = create_point(ifc_file, point_cache, x1, y1, altitude)
+                p2 = create_point(ifc_file, point_cache, x2, y2, altitude)
+                p3 = create_point(ifc_file, point_cache, x2, y2, altitude + h)
+                p4 = create_point(ifc_file, point_cache, x1, y1, altitude + h)
+                poly = ifc_file.create_entity("IfcPolyLoop", Polygon=[p1, p2, p3, p4, p1])
+                bound = ifc_file.create_entity("IfcFaceOuterBound", Bound=poly, Orientation=True)
+                face = ifc_file.create_entity("IfcFace", Bounds=[bound])
+                face_set = ifc_file.create_entity("IfcConnectedFaceSet", CfsFaces=[face])
+                brep = ifc_file.create_entity("IfcFacetedBrep", Outer=face_set)
+
+            shape_rep = ifc_file.create_entity("IfcShapeRepresentation",
+                ContextOfItems=context,
+                RepresentationIdentifier="Body",
+                RepresentationType="Brep",
+                Items=[brep]
+            )
+
+            add_global_style(ifc_file, brep, rgb=(0.0, 0.5, 1.0))
+
+            rep = ifc_file.create_entity("IfcProductDefinitionShape", Representations=[shape_rep])
+
+            wall = ifc_file.create_entity("IfcBuildingElementProxy",
+                GlobalId=ifcopenshell.guid.new(),
+                OwnerHistory=owner_history,
+                Name=f"Mur_{row['Segment']}",
+                Representation=rep,
+                ObjectPlacement=site_placement
+            )
+
+            ifc_file.create_entity("IfcRelContainedInSpatialStructure",
+                GlobalId=ifcopenshell.guid.new(),
+                OwnerHistory=owner_history,
+                RelatingStructure=storey,
+                RelatedElements=[wall]
+            )
+
+    ifc_file.write(output_path)
+    print(f"\u2705 Fichier IFC créé avec succès : {output_path}")
+

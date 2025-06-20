@@ -1,0 +1,10 @@
+- charger le CSV final (X1, Y1, X2, Y2, Hauteur)
+- pour chaque segment :
+   - créer les 4 coins 3D de la façade (bas-gauche, bas-droit, haut-droit, haut-gauche)
+   - créer un IfcFace
+- regrouper toutes les faces dans un IfcFacetedBrep
+- créer un IfcSpace avec cette enveloppe
+- insérer dans un modèle IFC complet : projet, site, bâtiment, étage
+- exporter
+
+pip freeze > requirements.txt

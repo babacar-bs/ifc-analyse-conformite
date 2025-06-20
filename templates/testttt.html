@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Outil de dessin de la parcelle</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style_dessin.css') }}"> 
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Outil de dessin du polygone parcellaire</h1>
+            <p>Chargez vos points IFC et définissez le polygone de la parcelle en sélectionnant les points dans l'ordre.</p>
+        </div>
+        
+        <div class="controls">
+            <label class="file-label" for="csvInput">Charger les points (CSV)</label>
+            <input type="file" id="csvInput" class="file-input" accept=".csv">
+            
+            <button id="resetButton" class="button secondary">Réinitialiser</button>
+            <button id="undoButton" class="button secondary">Annuler le dernier point</button>
+            <button id="closePolygonButton" class="button success">Fermer le polygone</button>
+            <button id="exportButton" class="button">Exporter (CSV)</button>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="canvas"></canvas>
+            <div id="pointTooltip" class="point-tooltip"></div>
+            <div class="zoom-controls">
+                <div class="zoom-button" id="zoomIn">+</div>
+                <div class="zoom-button" id="zoomOut">-</div>
+                <div class="zoom-button" id="resetZoom">⟲</div>
+            </div>
+        </div>
+        
+        <div class="panel coordinates-panel">
+            <h2>Points sélectionnés</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>N°</th>
+                        <th>ID Point</th>
+                        <th>X</th>
+                        <th>Y</th>
+                    </tr>
+                </thead>
+                <tbody id="selectedPointsTable">
+                    <!-- Les points sélectionnés seront listés ici -->
+                </tbody>
+            </table>
+            <div class="status" id="statusInfo">Aucun point sélectionné.</div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const POINT_RADIUS = 5;
+        const SELECTED_POINT_RADIUS = 8;
+        const HOVER_POINT_RADIUS = 7;
+        
+        // Variables globales
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d');
+        let points = []; // Tous les points chargés
+        let selectedPoints = []; // Points sélectionnés pour le polygone
+        let currentHoveredPoint = null;
+        let polygonClosed = false;
+        let scale = 1;
+        let offset = { x: 0, y: 0 };
+        let isDragging = false;
+        let lastMousePos = { x: 0, y: 0 };
+        let tooltip = document.getElementById('pointTooltip');
+        
+        // Adapter la taille du canvas à son conteneur
+        function resizeCanvas() {
+            canvas.width = canvas.clientWidth;
+            canvas.height = canvas.clientHeight;
+            drawCanvas();
+        }
+        
+        // Initialisation
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+        
+        // Événements souris pour la navigation dans le canvas
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = (e.clientX - rect.left);
+            const mouseY = (e.clientY - rect.top);
+            
+            // Vérifier si un point est cliqué
+            const clickedPoint = findPointAt(mouseX, mouseY);
+            
+            if (clickedPoint && !polygonClosed) {
+                // Si on clique sur le premier point après avoir sélectionné au moins 2 autres points, on ferme le polygone
+                if (selectedPoints.length >= 2 && clickedPoint === selectedPoints[0]) {
+                    closePolygon();
+                } else if (!selectedPoints.includes(clickedPoint)) {
+                    // Ajouter le point à la sélection
+                    selectedPoints.push(clickedPoint);
+                    updateSelectedPointsTable();
+                    drawCanvas();
+                }
+            } else {
+                // Sinon on commence à déplacer la vue
+                isDragging = true;
+                lastMousePos = { x: mouseX, y: mouseY };
+            }
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = (e.clientX - rect.left);
+            const mouseY = (e.clientY - rect.top);
+            
+            if (isDragging) {
+                // Déplacer la vue
+                offset.x += (mouseX - lastMousePos.x) / scale;
+                offset.y += (mouseY - lastMousePos.y) / scale;
+                lastMousePos = { x: mouseX, y: mouseY };
+                drawCanvas();
+            } else {
+                // Vérifier si la souris survole un point
+                const hoveredPoint = findPointAt(mouseX, mouseY);
+                if (hoveredPoint !== currentHoveredPoint) {
+                    currentHoveredPoint = hoveredPoint;
+                    drawCanvas();
+                    
+                    // Afficher/masquer le tooltip
+                    if (hoveredPoint) {
+                        tooltip.style.display = 'block';
+                        tooltip.style.left = (mouseX + 15) + 'px';
+                        tooltip.style.top = (mouseY - 25) + 'px';
+                        tooltip.textContent = `ID: ${hoveredPoint.id}, X: ${hoveredPoint.x.toFixed(2)}, Y: ${hoveredPoint.y.toFixed(2)}`;
+                    } else {
+                        tooltip.style.display = 'none';
+                    }
+                }
+                
+                // Mettre à jour la position du tooltip s'il est affiché
+                if (currentHoveredPoint) {
+                    tooltip.style.left = (mouseX + 15) + 'px';
+                    tooltip.style.top = (mouseY - 25) + 'px';
+                }
+            }
+        });
+        
+        canvas.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
+        
+        canvas.addEventListener('mouseout', () => {
+            isDragging = false;
+            tooltip.style.display = 'none';
+        });
+        
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = (e.clientX - rect.left);
+            const mouseY = (e.clientY - rect.top);
+            
+            // Position avant zoom
+            const worldX = (mouseX / scale) - offset.x;
+            const worldY = (mouseY / scale) - offset.y;
+            
+            // Facteur de zoom
+            const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+            scale *= zoomFactor;
+            
+            // Limiter le zoom
+            scale = Math.min(Math.max(0.1, scale), 10);
+            
+            // Position après zoom - doit rester la même en coordonnées monde
+            offset.x = -(worldX - (mouseX / scale));
+            offset.y = -(worldY - (mouseY / scale));
+            
+            drawCanvas();
+        });
+        
+        // Trouver un point aux coordonnées données (avec tolérance)
+        function findPointAt(x, y) {
+            // Convertir les coordonnées écran en coordonnées monde
+            const worldX = (x / scale) - offset.x;
+            const worldY = (y / scale) - offset.y;
+            
+            // Tolérance plus grande pour faciliter la sélection
+            const tolerance = POINT_RADIUS * 2 / scale;
+            
+            for (const point of points) {
+                const dx = point.x - worldX;
+                const dy = point.y - worldY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance <= tolerance) {
+                    return point;
+                }
+            }
+            
+            return null;
+        }
+        
+        // Dessiner le canvas
+        function drawCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Appliquer la transformation
+            ctx.save();
+            ctx.translate(offset.x * scale, offset.y * scale);
+            ctx.scale(scale, scale);
+            
+            // Dessiner une grille
+            drawGrid();
+            
+            // Dessiner les lignes entre les points sélectionnés
+            if (selectedPoints.length > 1) {
+                ctx.beginPath();
+                ctx.moveTo(selectedPoints[0].x, selectedPoints[0].y);
+                
+                for (let i = 1; i < selectedPoints.length; i++) {
+                    ctx.lineTo(selectedPoints[i].x, selectedPoints[i].y);
+                }
+                
+                if (polygonClosed) {
+                    ctx.lineTo(selectedPoints[0].x, selectedPoints[0].y);
+                    
+                    // Remplir le polygone avec une couleur semi-transparente
+                    ctx.fillStyle = 'rgba(46, 204, 113, 0.2)';
+                    ctx.fill();
+                }
+                
+                ctx.strokeStyle = '#3498db';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+            
+            // Dessiner tous les points
+            for (const point of points) {
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, POINT_RADIUS, 0, Math.PI * 2);
+                
+                if (selectedPoints.includes(point)) {
+                    ctx.fillStyle = '#3498db';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    ctx.fill();
+                } else if (point === currentHoveredPoint) {
+                    ctx.fillStyle = 'rgba(52, 152, 219, 0.5)';
+                    ctx.fill();
+                } else {
+                    ctx.fillStyle = '#95a5a6';
+                    ctx.fill();
+                }
+            }
+            
+            // Dessiner le premier point sélectionné un peu différemment s'il y en a
+            if (selectedPoints.length > 0) {
+                const firstPoint = selectedPoints[0];
+                ctx.beginPath();
+                ctx.arc(firstPoint.x, firstPoint.y, SELECTED_POINT_RADIUS, 0, Math.PI * 2);
+                ctx.fillStyle = '#2ecc71';
+                ctx.fill();
+                ctx.strokeStyle = '#27ae60';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        // Dessiner une grille
+        function drawGrid() {
+            const gridSize = 50; // Taille des cellules de la grille
+            const range = 10000; // Étendre la grille dans toutes les directions
+            
+            ctx.strokeStyle = 'rgba(200, 200, 200, 0.2)';
+            ctx.lineWidth = 0.5;
+            
+            // Lignes horizontales
+            for (let y = -range; y <= range; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(-range, y);
+                ctx.lineTo(range, y);
+                ctx.stroke();
+            }
+            
+            // Lignes verticales
+            for (let x = -range; x <= range; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, -range);
+                ctx.lineTo(x, range);
+                ctx.stroke();
+            }
+            
+            // Axes principaux plus visibles
+            ctx.strokeStyle = 'rgba(200, 200, 200, 0.5)';
+            ctx.lineWidth = 1;
+            
+            // Axe X
+            ctx.beginPath();
+            ctx.moveTo(-range, 0);
+            ctx.lineTo(range, 0);
+            ctx.stroke();
+            
+            // Axe Y
+            ctx.beginPath();
+            ctx.moveTo(0, -range);
+            ctx.lineTo(0, range);
+            ctx.stroke();
+        }
+        
+        // Charger les points depuis un fichier CSV
+        document.getElementById('csvInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const content = event.target.result;
+                parseCSV(content);
+            };
+            reader.readAsText(file);
+        });
+        
+        // Parser le contenu CSV
+        function parseCSV(content) {
+            // Réinitialiser tout
+            points = [];
+            selectedPoints = [];
+            polygonClosed = false;
+            updateSelectedPointsTable();
+            
+            // Diviser par lignes
+            const lines = content.split('\n');
+            if (lines.length === 0) return;
+            
+            // Vérifier les en-têtes (première ligne)
+            const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+            
+            // Indices des colonnes
+            let idIndex = headers.indexOf('id');
+            let xIndex = headers.indexOf('x');
+            let yIndex = headers.indexOf('y');
+            
+            // Si les en-têtes ne sont pas trouvés, essayer d'autres noms courants
+            if (xIndex === -1) xIndex = headers.indexOf('x1') !== -1 ? headers.indexOf('x1') : headers.indexOf('coordx');
+            if (yIndex === -1) yIndex = headers.indexOf('y1') !== -1 ? headers.indexOf('y1') : headers.indexOf('coordy');
+            
+            // Vérifier si on a au moins les coordonnées X et Y
+            if (xIndex === -1 || yIndex === -1) {
+                alert("Format CSV non reconnu. Assurez-vous d'avoir au moins des colonnes X et Y.");
+                return;
+            }
+            
+            // Si pas d'ID, on utilisera l'index de ligne
+            const useLineIndexAsId = idIndex === -1;
+            
+            // Parser les données
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue; // Ignorer les lignes vides
+                
+                const values = line.split(',').map(v => v.trim());
+                
+                const id = useLineIndexAsId ? i : values[idIndex];
+                const x = parseFloat(values[xIndex]);
+                const y = parseFloat(values[yIndex]);
+                
+                // Vérifier si les coordonnées sont valides
+                if (!isNaN(x) && !isNaN(y)) {
+                    points.push({ id, x, y });
+                }
+            }
+            
+            // Si on a des points, centrer la vue sur eux
+            if (points.length > 0) {
+                autoZoomToFitAllPoints();
+            }
+            
+            // Mettre à jour le statut
+            document.getElementById('statusInfo').textContent = `${points.length} points chargés. Sélectionnez les points pour former le polygone de la parcelle.`;
+            
+            // Dessiner le canvas
+            drawCanvas();
+        }
+        
+        // Zoom automatique pour voir tous les points
+        function autoZoomToFitAllPoints() {
+            if (points.length === 0) return;
+            
+            // Trouver les limites des points
+            let minX = points[0].x;
+            let maxX = points[0].x;
+            let minY = points[0].y;
+            let maxY = points[0].y;
+            
+            for (const point of points) {
+                minX = Math.min(minX, point.x);
+                maxX = Math.max(maxX, point.x);
+                minY = Math.min(minY, point.y);
+                maxY = Math.max(maxY, point.y);
+            }
+            
+            // Ajouter une marge
+            const margin = 50;
+            minX -= margin;
+            maxX += margin;
+            minY -= margin;
+            maxY += margin;
+            
+            // Calculer l'échelle nécessaire
+            const scaleX = canvas.width / (maxX - minX);
+            const scaleY = canvas.height / (maxY - minY);
+            scale = Math.min(scaleX, scaleY, 10); // Limiter le zoom maximum
+            
+            // Calculer le décalage pour centrer
+            const centerX = (minX + maxX) / 2;
+            const centerY = (minY + maxY) / 2;
+            
+            offset.x = (canvas.width / 2 / scale) - centerX;
+            offset.y = (canvas.height / 2 / scale) - centerY;
+        }
+        
+        // Mettre à jour le tableau des points sélectionnés
+        function updateSelectedPointsTable() {
+            const table = document.getElementById('selectedPointsTable');
+            table.innerHTML = '';
+            
+            for (let i = 0; i < selectedPoints.length; i++) {
+                const point = selectedPoints[i];
+                const row = document.createElement('tr');
+                
+                const indexCell = document.createElement('td');
+                indexCell.textContent = i + 1;
+                
+                const idCell = document.createElement('td');
+                idCell.textContent = point.id;
+                
+                const xCell = document.createElement('td');
+                xCell.textContent = point.x.toFixed(3);
+                
+                const yCell = document.createElement('td');
+                yCell.textContent = point.y.toFixed(3);
+                
+                row.appendChild(indexCell);
+                row.appendChild(idCell);
+                row.appendChild(xCell);
+                row.appendChild(yCell);
+                
+                table.appendChild(row);
+            }
+            
+            // Mettre à jour le statut
+            const statusElement = document.getElementById('statusInfo');
+            if (selectedPoints.length === 0) {
+                statusElement.textContent = 'Aucun point sélectionné.';
+            } else if (polygonClosed) {
+                statusElement.textContent = `Polygone fermé avec ${selectedPoints.length} points.`;
+            } else {
+                statusElement.textContent = `${selectedPoints.length} points sélectionnés. Cliquez sur le premier point pour fermer le polygone.`;
+            }
+        }
+        
+        // Fermer le polygone
+        function closePolygon() {
+            if (selectedPoints.length >= 3) {
+                polygonClosed = true;
+                updateSelectedPointsTable();
+                drawCanvas();
+            } else {
+                alert('Il faut au moins 3 points pour former un polygone.');
+            }
+        }
+        
+        // Réinitialiser la sélection
+        document.getElementById('resetButton').addEventListener('click', () => {
+            selectedPoints = [];
+            polygonClosed = false;
+            updateSelectedPointsTable();
+            drawCanvas();
+        });
+        
+        // Annuler le dernier point
+        document.getElementById('undoButton').addEventListener('click', () => {
+            if (polygonClosed) {
+                polygonClosed = false;
+            } else if (selectedPoints.length > 0) {
+                selectedPoints.pop();
+            }
+            updateSelectedPointsTable();
+            drawCanvas();
+        });
+        
+        // Fermer le polygone manuellement
+        document.getElementById('closePolygonButton').addEventListener('click', () => {
+            closePolygon();
+        });
+        
+        // Exporter au format CSV
+        document.getElementById('exportButton').addEventListener('click', () => {
+            if (selectedPoints.length < 3) {
+                alert('Veuillez sélectionner au moins 3 points pour former un polygone.');
+                return;
+            }
+            
+            let csvContent = 'ID,X,Y\n';
+            
+            for (const point of selectedPoints) {
+                csvContent += `${point.id},${point.x},${point.y}\n`;
+            }
+            
+            // Si le polygone n'est pas fermé, ajouter le premier point à la fin
+            if (!polygonClosed && selectedPoints.length >= 3) {
+                const firstPoint = selectedPoints[0];
+                csvContent += `${firstPoint.id},${firstPoint.x},${firstPoint.y}\n`;
+            }
+            
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'polygone_parcelle.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+        
+        // Contrôles de zoom
+        document.getElementById('zoomIn').addEventListener('click', () => {
+            // Zoomer au centre du canvas
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            
+            // Position avant zoom
+            const worldX = (centerX / scale) - offset.x;
+            const worldY = (centerY / scale) - offset.y;
+            
+            // Changer l'échelle
+            scale *= 1.2;
+            scale = Math.min(scale, 10); // Limiter le zoom maximum
+            
+            // Position après zoom - doit rester la même en coordonnées monde
+            offset.x = -(worldX - (centerX / scale));
+            offset.y = -(worldY - (centerY / scale));
+            
+            drawCanvas();
+        });
+        
+        document.getElementById('zoomOut').addEventListener('click', () => {
+            // Dézoomer au centre du canvas
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            
+            // Position avant zoom
+            const worldX = (centerX / scale) - offset.x;
+            const worldY = (centerY / scale) - offset.y;
+            
+            // Changer l'échelle
+            scale /= 1.2;
+            scale = Math.max(scale, 0.1); // Limiter le zoom minimum
+            
+            // Position après zoom - doit rester la même en coordonnées monde
+            offset.x = -(worldX - (centerX / scale));
+            offset.y = -(worldY - (centerY / scale));
+            
+            drawCanvas();
+        });
+        
+        document.getElementById('resetZoom').addEventListener('click', () => {
+            autoZoomToFitAllPoints();
+            drawCanvas();
+        });
+        
+        // Initialiser la vue
+        drawCanvas();
+    </script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+Metadata-Version: 2.1
+Name: pyprops
+Version: 2.0.2
+Summary: Python properties library
+Home-page: UNKNOWN
+License: UNKNOWN
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
+License-File: LICENSE
+
+# pyprops Library
+***
+This library helps you to do the following:
+* Read the properties from a file and get them as a dictionary (Introduced in version 2.0.1)
+* Read and replace the properties file contents in place supplying the values to be replaced
+* Read the properties file and create new file with replaced properties
+***
+<div><a href="https://github.com/sourabhninawe/python-properties-library">Source Code</a></div>
+

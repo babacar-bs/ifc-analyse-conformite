@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Analyse de la conformité</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/icone.png') }}" /> -->
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/icone_seve-up.ico') }}" />
+
+
+</head>
+
+<body>
+  <header class="site-header">
+    <a href="/" class="logo-link">
+      <img src="{{ url_for('static', filename='img/logo_seve-up.png') }}" alt="Seve-Up" class="logo">
+    </a>
+
+    <!--  -->
+    {% if current_user.is_authenticated %}
+      <div class="user-menu">
+        <span>{{ current_user.email }}</span>
+        <a href="{{ url_for('logout') }}" class="logout-btn">Déconnexion</a>
+      </div>
+    {% endif %}
+    <!--  -->
+  </header>
+  <div class="container">
+    <h1>Analyse de la conformite d'une maquette</h1>
+    {% if not resultats %}
+    <div class="card upload-box">
+    <form method="POST" enctype="multipart/form-data">
+      <label for="ifc-file" class="dropzone" id="dropzone-label">
+        Glissez-déposez votre fichier IFC ici ou <span class="link">Parcourir</span>
+        <input type="file" id="ifc-file" name="ifc-file" hidden>
+      </label>
+
+     
+      <div class="file-info" id="file-info" style="display: none;">
+        <p><strong>Nom du fichier :</strong> <span id="filename"></span></p>
+      </div>
+      
+      <div id="analyser-btn" style="display: none;">
+        <div id="loader" style="display: none; text-align: center;">
+          <div class="loader" style="margin: 0 auto;"></div>
+          <p style="color: #00b0d1; margin-top: 10px;">Analyse en cours...</p>
+        </div>
+        <button type="submit" class="primary-btn">Analyser le fichier</button>
+        <!-- <button color="white" class="primary-btn">  <a href="/test">Definir la parcelle</a></button> -->
+
+      </div>
+      
+    </form>
+  </div>
+  {% endif %} 
+
+    {% if filename %}
+    <p><strong>Fichier importé :</strong> {{ filename }}</p>
+    {% endif %}
+
+
+
+    <!-- {% if resultats %}
+  <h2>Résultats :</h2>
+
+  {% if resultats.image_path %}
+    <h4>Polygone extrait</h4>
+    <img src="{{ url_for('static', filename='emprise_polygone.png') }}" alt="Polygone emprise" style="max-width: 600px;">
+  {% endif %}
+{% endif %} -->
+{% if resultats %}
+<h2>Résultats :</h2>
+
+<div style="display: flex; gap: 40px; align-items: flex-start; flex-wrap: wrap;">
+
+  <!-- Polygone à gauche -->
+  <div style="flex: 1;">
+    <h4>Polygone 2D extrait</h4>
+    <!-- <img src="{{ url_for('static', filename='emprise_polygone.png') }}" alt="Polygone emprise" style="max-width: 100%; border: 1px solid #ccc; border-radius: 5px;"> -->
+    <img src="{{ url_for('static', filename='parcelle/parcelle_1.png') }}"
+     alt="Polygone emprise"
+     style="width: 100%;height: auto; max-width: none; border: 2px solid #333; border-radius: 8px;">
+
+  </div>
+
+<!-- <div style="flex: 1; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+  <h4>Choisir le type pour chaque segment</h4>
+  <form method="POST" action="/traitement">
+    {% for seg in segments %}
+      <div style="margin-bottom: 15px;">
+        <label>Segment {{ seg.id }}</label>
+        <select name="type-{{ seg.id }}" 
+        required 
+        class="segment-type" 
+        data-segid="{{ seg.id }}"
+        style="width: 100%; padding: 6px; margin-top: 5px;">
+  <option value="">-- Choisir un type --</option>
+  <option value="LS">LS</option>
+  <option value="VO">VO</option>
+  <option value="FP">FP</option>
+</select>
+
+<select name="vue-{{ seg.id }}"
+        class="segment-vue"
+        id="vue-{{ seg.id }}"
+        style="width: 100%; padding: 6px; margin-top: 5px; display: none;">
+
+  <option value="">-- Fenêtre ou Aveugle --</option>
+  <option value="fenetre">Fenêtre</option>
+  <option value="aveugle">Aveugle</option>
+</select>
+
+      </div>
+    {% endfor %}
+    <button type="submit" class="primary-btn">Valider les types</button>
+  </form>
+</div> -->
+<div style="flex: 1; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+  <h4>Paramètres d'analyse</h4>
+  <form method="POST" action="/traitement">
+    
+    <!-- Champ pour la hauteur -->
+    <div style="margin-bottom: 20px;">
+      <label for="building-height">Hauteur du bâtiment (mètres):</label>
+      <input type="number" id="building-height" name="building-height" 
+             min="1" max="300" step="1" value="24" required
+             style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px;">
+    </div>
+
+    <!-- Sélection des types de segments -->
+    <h5 style="margin-top: 25px; margin-bottom: 15px;">Configuration des segments:</h5>
+    {% for seg in segments %}
+    <div style="margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #eee;">
+      <label>Segment {{ seg.id }}</label>
+      <select name="type-{{ seg.id }}" 
+              required 
+              class="segment-type" 
+              data-segid="{{ seg.id }}"
+              style="width: 100%; padding: 6px; margin-top: 5px;">
+        <option value="">-- Choisir un type --</option>
+        <option value="LS">LS</option>
+        <option value="VO">VO</option>
+        <option value="FP">FP</option>
+      </select>
+
+      <select name="vue-{{ seg.id }}"
+              class="segment-vue"
+              id="vue-{{ seg.id }}"
+              style="width: 100%; padding: 6px; margin-top: 5px; display: none;">
+        <option value="">-- Fenêtre ou Aveugle --</option>
+        <option value="fenetre">Fenêtre</option>
+        <option value="aveugle">Aveugle</option>
+      </select>
+    </div>
+    {% endfor %}  
+    <input type="hidden" name="analysis_id" value="{{ analysis_id }}">
+    <button type="submit" class="primary-btn" style="margin-top: 20px;">Lancer l'analyse</button>
+  </form>
+</div>
+
+</div>
+{% endif %}
+
+
+  </div>
+
+
+  <!-- <script>
+  document.getElementById("ifc-file").addEventListener("change", function(event) {
+    const file = event.target.files[0];
+    if (file) {
+      // Affiche le nom du fichier
+      document.getElementById("filename").textContent = file.name;
+      document.getElementById("file-info").style.display = "block";
+
+      // Affiche le bouton "Analyser"
+      const bouton = document.getElementById("analyser-btn");
+      if (bouton) bouton.style.display = "block";
+
+      // Change juste le texte dans la dropzone
+      const dropzone = document.getElementById("dropzone-label");
+      dropzone.firstChild.nodeValue = `Fichier sélectionné : ${file.name} `;
+    }
+  });
+</script>
+<script>
+  document.querySelector("form").addEventListener("submit", function () {
+    document.getElementById("loader").style.display = "block";
+    document.querySelector("button[type='submit']").disabled = true;
+  });
+</script>
+<script>
+  document.querySelectorAll('.segment-type').forEach(select => {
+    const segId = select.dataset.segid;
+    const vueSelect = document.getElementById(`vue-${segId}`);
+
+    // Cacher par défaut
+    vueSelect.style.display = 'none';
+
+    select.addEventListener('change', () => {
+      const type = select.value;
+      if (type === 'LS' || type === 'FP') {
+        vueSelect.style.display = 'block';
+      } else {
+        vueSelect.style.display = 'none';
+        vueSelect.value = '';  // reset si non applicable
+      }
+    });
+  });
+</script>
+
+<script>
+  document.querySelectorAll(".segment-type").forEach(select => {
+    select.addEventListener("change", function () {
+      const segId = this.dataset.segid;
+      const vueSelect = document.getElementById("vue-" + segId);
+
+      if (this.value === "LS" || this.value === "FP") {
+        vueSelect.style.display = "block";
+      } else {
+        vueSelect.style.display = "none";
+        vueSelect.value = ""; // reset la valeur si caché
+      }
+    });
+  });
+
+  // Appel initial au cas où certains sont déjà sélectionnés
+  window.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll(".segment-type").forEach(select => select.dispatchEvent(new Event('change')));
+  });
+</script>
+
+<script>
+  document.querySelector("form").addEventListener("submit", function() {
+  // Créer l'overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'loading-overlay';
+  
+  // Créer le spinner au centre
+  const spinner = document.createElement('div');
+  spinner.className = 'loader';
+  spinner.style.position = 'fixed';
+  spinner.style.top = '50%';
+  spinner.style.left = '50%';
+  spinner.style.transform = 'translate(-50%, -50%)';
+  spinner.style.display = 'block';
+  
+  // Ajouter à la page
+  overlay.appendChild(spinner);
+  document.body.appendChild(overlay);
+  
+  // Désactiver le bouton
+  document.querySelector("button[type='submit']").disabled = true;
+});
+
+// À exécuter quand l'analyse est terminée
+function hideLoader() {
+  const overlay = document.querySelector('.loading-overlay');
+  if (overlay) overlay.remove();
+  
+  document.getElementById("loader").style.display = "none";
+  document.querySelector("button[type='submit']").disabled = false;
+}
+</script> -->
+
+
+
+<!-- ######################################################################################## -->
+
+
+
+
+<!-- <script>
+// Version consolidée et optimisée de tous vos scripts
+document.addEventListener("DOMContentLoaded", function() {
+  // 1. Gestion de l'upload de fichier
+  const fileInput = document.getElementById("ifc-file");
+  if (fileInput) {
+    fileInput.addEventListener("change", function(event) {
+      const file = event.target.files[0];
+      if (file) {
+        document.getElementById("filename").textContent = file.name;
+        document.getElementById("file-info").style.display = "block";
+        document.getElementById("analyser-btn").style.display = "block";
+        
+        const dropzone = document.getElementById("dropzone-label");
+        if (dropzone) {
+          dropzone.firstChild.nodeValue = `Fichier sélectionné : ${file.name} `;
+        }
+      }
+    });
+  }
+
+  // 2. Gestion dynamique des segments
+  const setupSegmentSelects = () => {
+    document.querySelectorAll('.segment-type').forEach(select => {
+      const segId = select.dataset.segid;
+      const vueSelect = document.getElementById(`vue-${segId}`);
+
+      // Initialisation
+      if (vueSelect) {
+        vueSelect.style.display = 'none';
+        
+        // Gestion des changements
+        select.addEventListener('change', () => {
+          const shouldShow = ['LS', 'FP'].includes(select.value);
+          vueSelect.style.display = shouldShow ? 'block' : 'none';
+          if (!shouldShow) vueSelect.value = '';
+        });
+      }
+    });
+  };
+
+  // 3. Validation du formulaire et loader
+  const forms = document.querySelectorAll("form");
+  forms.forEach(form => {
+    form.addEventListener("submit", function(e) {
+      // Validation de la hauteur
+      const heightInput = document.getElementById("building-height");
+      if (heightInput) {
+        const height = parseFloat(heightInput.value);
+        if (isNaN(height) || height < 1 || height > 300) {
+          alert("Veuillez entrer une hauteur valide (entre 1 et 300 mètres)");
+          e.preventDefault();
+          return;
+        }
+      }
+
+      // Validation des segments
+      const emptySegments = [...document.querySelectorAll('.segment-type')]
+        .filter(select => !select.value);
+      
+      if (emptySegments.length > 0) {
+        alert(`Veuillez spécifier un type pour les segments: ${emptySegments.map(s => s.dataset.segid).join(', ')}`);
+        e.preventDefault();
+        return;
+      }
+
+      // Affichage du loader
+      const overlay = document.createElement('div');
+      overlay.className = 'loading-overlay';
+      
+      const spinner = document.createElement('div');
+      spinner.className = 'loader';
+      Object.assign(spinner.style, {
+        position: 'fixed',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        display: 'block'
+      });
+      
+      overlay.appendChild(spinner);
+      document.body.appendChild(overlay);
+      
+      // Désactivation du bouton
+      const submitBtn = form.querySelector("button[type='submit']");
+      if (submitBtn) submitBtn.disabled = true;
+    });
+  });
+
+  // Initialisation au chargement
+  setupSegmentSelects();
+});
+
+// Fonction pour cacher le loader (à appeler après traitement)
+function hideLoader() {
+  const overlay = document.querySelector('.loading-overlay');
+  if (overlay) overlay.remove();
+  
+  const loader = document.getElementById("loader");
+  if (loader) loader.style.display = "none";
+  
+  document.querySelectorAll("button[type='submit']").forEach(btn => {
+    btn.disabled = false;
+  });
+}
+</script> -->
+
+
+
+<!-- ##################################################################################### -->
+ <script>
+// Version corrigée et optimisée des scripts
+document.addEventListener("DOMContentLoaded", function() {
+  // 1. Gestion de l'upload de fichier
+  const fileInput = document.getElementById("ifc-file");
+  if (fileInput) {
+    fileInput.addEventListener("change", function(event) {
+      const file = event.target.files[0];
+      if (file) {
+        document.getElementById("filename").textContent = file.name;
+        document.getElementById("file-info").style.display = "block";
+        document.getElementById("analyser-btn").style.display = "block";
+
+        const dropzone = document.getElementById("dropzone-label");
+        if (dropzone) {
+          dropzone.firstChild.nodeValue = `Fichier sélectionné : ${file.name} `;
+        }
+      }
+    });
+  }
+
+  // 2. Gestion dynamique des segments
+  const setupSegmentSelects = () => {
+    document.querySelectorAll('.segment-type').forEach(select => {
+      const segId = select.dataset.segid;
+      const vueSelect = document.getElementById(`vue-${segId}`);
+
+      if (vueSelect) {
+        vueSelect.style.display = 'none';
+
+        const updateVueField = () => {
+          const shouldShow = ['LS', 'FP'].includes(select.value);
+          vueSelect.style.display = shouldShow ? 'block' : 'none';
+          vueSelect.required = shouldShow; // rendre requis ou non
+          if (!shouldShow) vueSelect.value = '';
+        };
+
+        select.addEventListener('change', updateVueField);
+        updateVueField(); // appel initial
+      }
+    });
+  };
+
+  // 3. Validation et affichage du loader
+  const forms = document.querySelectorAll("form");
+  forms.forEach(form => {
+    form.addEventListener("submit", function(e) {
+      // Validation hauteur
+      const heightInput = document.getElementById("building-height");
+      if (heightInput) {
+        const height = parseFloat(heightInput.value);
+        if (isNaN(height) || height < 1 || height > 300) {
+          alert("Veuillez entrer une hauteur valide (entre 1 et 300 mètres)");
+          e.preventDefault();
+          return;
+        }
+      }
+
+      // Validation type segment
+      const emptySegments = [...form.querySelectorAll('.segment-type')]
+        .filter(select => !select.value);
+      if (emptySegments.length > 0) {
+        alert(`Veuillez spécifier un type pour les segments: ${emptySegments.map(s => s.dataset.segid).join(', ')}`);
+        e.preventDefault();
+        return;
+      }
+
+      // Validation des champs "vue" si requis
+      const invalidVues = [...form.querySelectorAll('.segment-vue')]
+        .filter(select => select.required && !select.value);
+      if (invalidVues.length > 0) {
+        alert(`Veuillez compléter les champs 'Fenêtre ou Aveugle' pour les segments: ${invalidVues.map(s => s.id.split('-')[1]).join(', ')}`);
+        e.preventDefault();
+        return;
+      }
+
+      // Affichage du loader
+      const overlay = document.createElement('div');
+      overlay.className = 'loading-overlay';
+
+      const spinner = document.createElement('div');
+      spinner.className = 'loader';
+      Object.assign(spinner.style, {
+        position: 'fixed',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        display: 'block'
+      });
+
+      overlay.appendChild(spinner);
+      document.body.appendChild(overlay);
+
+      const submitBtn = form.querySelector("button[type='submit']");
+      if (submitBtn) submitBtn.disabled = true;
+    });
+  });
+
+  // Initialisation
+  setupSegmentSelects();
+});
+
+// Fonction pour cacher le loader
+function hideLoader() {
+  const overlay = document.querySelector('.loading-overlay');
+  if (overlay) overlay.remove();
+
+  const loader = document.getElementById("loader");
+  if (loader) loader.style.display = "none";
+
+  document.querySelectorAll("button[type='submit']").forEach(btn => {
+    btn.disabled = false;
+  });
+}
+</script>
+
+</body>
+</html>

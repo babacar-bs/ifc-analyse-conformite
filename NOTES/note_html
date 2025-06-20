@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Analyse</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="container">
+    <h1>Analyse de la conformite d'une maquette</h1>
+
+    <div class="card upload-box">  
+    <form method="POST" enctype="multipart/form-data">
+
+      <label for="ifc-file" class="dropzone" id="dropzone-label">
+  Glissez-déposez votre fichier IFC ici ou <span class="link">Parcourir</span>
+  <input type="file" id="ifc-file" name="ifc-file" hidden>
+</label>
+
+      <div class="file-info" id="file-info" style="display: none;">
+      <p><strong>Nom du fichier :</strong> <span id="filename"></span></p>
+      </div>
+      {% if not resultats %}
+  <div id="analyser-btn" style="display: none;">
+    <button type="submit" class="primary-btn">Analyser le fichier</button>
+  </div>
+{% endif %}
+
+      </form>
+    
+    </div>
+
+    {% if filename %}
+    <p><strong>Fichier importé :</strong> {{ filename }}</p>
+    {% endif %}
+
+
+
+    <!-- {% if resultats %}
+  <h2>Résultats :</h2>
+
+  {% if resultats.image_path %}
+    <h4>Polygone extrait</h4>
+    <img src="{{ url_for('static', filename='emprise_polygone.png') }}" alt="Polygone emprise" style="max-width: 600px;">
+  {% endif %}
+{% endif %} -->
+{% if resultats %}
+<h2>Résultats :</h2>
+
+<div style="display: flex; gap: 40px; align-items: flex-start; flex-wrap: wrap;">
+
+  <!-- Polygone à gauche -->
+  <div style="flex: 1;">
+    <h4>Polygone 2D extrait</h4>
+    <!-- <img src="{{ url_for('static', filename='emprise_polygone.png') }}" alt="Polygone emprise" style="max-width: 100%; border: 1px solid #ccc; border-radius: 5px;"> -->
+    <img src="{{ url_for('static', filename='emprise_polygone.png') }}"
+     alt="Polygone emprise"
+     style="width: 100%;height: auto; max-width: none; border: 2px solid #333; border-radius: 8px;">
+
+  </div>
+
+<div style="flex: 1; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+  <h4>Choisir le type pour chaque segment</h4>
+  <form method="POST" action="/traiter_types">
+    {% for seg in segments %}
+      <div style="margin-bottom: 15px;">
+        <label>Segment {{ seg.id }}</label>
+        <select name="type-{{ seg.id }}" 
+        required 
+        class="segment-type" 
+        data-segid="{{ seg.id }}"
+        style="width: 100%; padding: 6px; margin-top: 5px;">
+  <option value="">-- Choisir un type --</option>
+  <option value="LS">LS</option>
+  <option value="VO">VO</option>
+  <option value="FP">FP</option>
+</select>
+
+<select name="vue-{{ seg.id }}"
+        class="segment-vue"
+        id="vue-{{ seg.id }}"
+        style="width: 100%; padding: 6px; margin-top: 5px; display: none;">
+
+  <option value="">-- Fenêtre ou Aveugle --</option>
+  <option value="Fenetre">Fenêtre</option>
+  <option value="Aveugle">Aveugle</option>
+</select>
+
+      </div>
+    {% endfor %}
+    <button type="submit" class="primary-btn">Valider les types</button>
+  </form>
+</div>
+
+
+</div>
+{% endif %}
+
+
+  </div>
+
+
+  <script>
+  document.getElementById("ifc-file").addEventListener("change", function(event) {
+    const file = event.target.files[0];
+    if (file) {
+      // Affiche le nom du fichier
+      document.getElementById("filename").textContent = file.name;
+      document.getElementById("file-info").style.display = "block";
+
+      // Affiche le bouton "Analyser"
+      const bouton = document.getElementById("analyser-btn");
+      if (bouton) bouton.style.display = "block";
+
+      // Change juste le texte dans la dropzone
+      const dropzone = document.getElementById("dropzone-label");
+      dropzone.firstChild.nodeValue = `Fichier sélectionné : ${file.name} `;
+    }
+  });
+</script>
+<script>
+  document.querySelector("form").addEventListener("submit", function () {
+    document.getElementById("loader").style.display = "block";
+    document.querySelector("button[type='submit']").disabled = true;
+  });
+</script>
+<script>
+  document.querySelectorAll('.segment-type').forEach(select => {
+    const segId = select.dataset.segid;
+    const vueSelect = document.getElementById(`vue-${segId}`);
+
+    // Cacher par défaut
+    vueSelect.style.display = 'none';
+
+    select.addEventListener('change', () => {
+      const type = select.value;
+      if (type === 'LS' || type === 'FP') {
+        vueSelect.style.display = 'block';
+      } else {
+        vueSelect.style.display = 'none';
+        vueSelect.value = '';  // reset si non applicable
+      }
+    });
+  });
+</script>
+
+<script>
+  document.querySelectorAll(".segment-type").forEach(select => {
+    select.addEventListener("change", function () {
+      const segId = this.dataset.segid;
+      const vueSelect = document.getElementById("vue-" + segId);
+
+      if (this.value === "LS" || this.value === "FP") {
+        vueSelect.style.display = "block";
+      } else {
+        vueSelect.style.display = "none";
+        vueSelect.value = ""; // reset la valeur si caché
+      }
+    });
+  });
+
+  // Appel initial au cas où certains sont déjà sélectionnés
+  window.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll(".segment-type").forEach(select => select.dispatchEvent(new Event('change')));
+  });
+</script>
+
+</body>
+</html>
